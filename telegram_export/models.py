@@ -46,8 +46,8 @@ class Media(Base):
 class Resume(Base):
     __tablename__ = 'Resume'
 
-    ContextID = Column(Integer, primary_key=True)
     ID = Column(Integer, nullable=False)
+    ContextID = Column(Integer, primary_key=True)
     Date = Column(Integer, nullable=False)
     StopAt = Column(Integer, nullable=False)
 
@@ -55,8 +55,8 @@ class Resume(Base):
 class ResumeEntity(Base):
     __tablename__ = 'ResumeEntity'
 
-    ContextID = Column(Integer, primary_key=True, nullable=False)
     ID = Column(Integer, primary_key=True, nullable=False)
+    ContextID = Column(Integer, primary_key=True, nullable=False)
     AccessHash = Column(Integer)
 
 
@@ -72,12 +72,14 @@ class ResumeMedia(Base):
 class SelfInformation(Base):
     __tablename__ = 'SelfInformation'
 
+    ID = Column(Integer, primary_key=True)
     UserID = Column(Integer)
 
 
 class Version(Base):
     __tablename__ = 'Version'
 
+    ID = Column(Integer, primary_key=True)
     Version = Column(Integer)
 
 
