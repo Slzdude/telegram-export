@@ -10,6 +10,7 @@ from datetime import datetime
 from enum import Enum
 import os.path
 
+import arrow
 from telethon.tl import types
 from telethon.utils import get_peer_id, resolve_id, get_input_peer
 
@@ -606,7 +607,7 @@ class Dumper:
             # Extra fallback cases for common parts
             row['type'] = 'photo'
             row['mime_type'] = 'image/jpeg'
-            row['name'] = str(media.date)
+            row['name'] = arrow.get(media.date).format('YYYYMMDDHHmmssSSS')
             sizes = [x for x in media.sizes
                      if isinstance(x, (types.PhotoSize, types.PhotoCachedSize))]
             if sizes:
@@ -632,7 +633,7 @@ class Dumper:
                     media = media.location
 
         if isinstance(media, (types.UserProfilePhoto, types.ChatPhoto)):
-            row['type'] = 'photo'
+            row['type'] = 'userphoto'
             row['mime_type'] = 'image/jpeg'
             row['thumbnail_id'] = self.dump_media(
                 media.photo_small, 'thumbnail'

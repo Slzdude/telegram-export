@@ -3,13 +3,13 @@
 import logging
 import re
 
-from async_generator import yield_, async_generator
+# from async_generator import yield_, async_generator
+
 from telethon import utils
 
 from .downloader import Downloader
 
 
-@async_generator
 async def entities_from_str(method, string):
     """Helper function to load entities from the config file"""
     for who in string.split(','):
@@ -18,10 +18,9 @@ async def entities_from_str(method, string):
         who = who.split(':', 1)[0].strip()  # Ignore anything after ':'
         if re.match(r'[^+]-?\d+', who):
             who = int(who)
-        await yield_(await method(who))
+        yield await method(who)
 
 
-@async_generator
 async def get_entities_iter(mode, in_list, client):
     """
     Get a generator of entities to act on given a mode ('blacklist',
@@ -33,7 +32,7 @@ async def get_entities_iter(mode, in_list, client):
     if mode == 'whitelist':
         assert client is not None
         async for ent in entities_from_str(client.get_input_entity, in_list):
-            await yield_(ent)
+            yield ent
     elif mode == 'blacklist':
         assert client is not None
         avoid = set()
@@ -43,7 +42,7 @@ async def get_entities_iter(mode, in_list, client):
         # TODO Should this get_dialogs call be cached? How?
         async for dialog in client.iter_dialogs():
             if dialog.id not in avoid:
-                await yield_(dialog.input_entity)
+                yield dialog.input_entity
 
 
 class Exporter:

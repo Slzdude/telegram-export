@@ -61,8 +61,7 @@ class BaseFormatter:
         else:
             raise TypeError('Invalid database object given: {}'.format(type(db)))
 
-        self.our_userid = self.dbconn.execute(
-            "SELECT UserID FROM SelfInformation").fetchone()[0]
+        self.our_userid = self.dbconn.execute("SELECT UserID FROM SelfInformation").fetchone()[0]
 
     @staticmethod
     @abstractmethod

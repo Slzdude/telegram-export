@@ -22,12 +22,12 @@ from telegram_export.formatters import NAME_TO_FORMATTER
 
 logger = logging.getLogger('')  # Root logger
 
-
 NO_USERNAME = '<no username>'
 
 
 class TqdmLoggingHandler(logging.Handler):
     """Redirect all logging messages through tqdm.write()"""
+
     def emit(self, record):
         try:
             msg = self.format(record)
@@ -43,15 +43,15 @@ def load_config(filename):
     """Load config from the specified file and return the parsed config"""
     # Get a path to the file. If it was specified, it should be fine.
     # If it was not specified, assume it's config.ini in the script's dir.
-    config_dir = appdirs.user_config_dir("telegram-export")
-
+    # config_dir = appdirs.user_config_dir("telegram-export")
+    config_dir = os.path.abspath('.')
     if not filename:
         filename = os.path.join(config_dir, 'config.ini')
 
     if not os.path.isfile(filename):
         logger.warning("No config file! Make one in {} and find an example "
                        "config at https://github.com/expectocode/"
-                       "telegram-export/blob/master/config.ini.example."
+                       "telegram-export/blob/master/config.ini."
                        "Alternatively, use --config-file FILE".format(filename))
         exit(1)
 
@@ -104,10 +104,10 @@ def load_config(filename):
         raise ValueError('Invalid file size given for MaxSize')
 
     max_size = int(float(m.group(1)) * {
-        'B': 1024**0,
-        'KB': 1024**1,
-        'MB': 1024**2,
-        'GB': 1024**3,
+        'B': 1024 ** 0,
+        'KB': 1024 ** 1,
+        'MB': 1024 ** 2,
+        'GB': 1024 ** 3,
     }.get((m.group(2) or 'MB').upper()))
     config['Dumper']['MaxSize'] = str(max_size)
     return config
@@ -115,7 +115,8 @@ def load_config(filename):
 
 def parse_args():
     """Parse command-line arguments to the script"""
-    parser = argparse.ArgumentParser(description="Download Telegram data (users, chats, messages, and media) into a database (and display the saved data)")
+    parser = argparse.ArgumentParser(
+        description="Download Telegram data (users, chats, messages, and media) into a database (and display the saved data)")
     parser.add_argument('--list-dialogs', action='store_true',
                         help='list dialogs and exit')
 
@@ -125,7 +126,7 @@ def parse_args():
 
     parser.add_argument('--config-file', default=None,
                         help='specify a config file. Default config.ini')
-                        # This None is handled in read_config.
+    # This None is handled in read_config.
 
     parser.add_argument('--contexts', type=str,
                         help='list of contexts to act on eg --contexts=12345, '
@@ -142,7 +143,7 @@ def parse_args():
                         help='formats the dumped messages with the specified '
                              'formatter and exits. You probably want to use '
                              'this in conjunction with --format-contexts.',
-                             choices=NAME_TO_FORMATTER)
+                        choices=NAME_TO_FORMATTER)
 
     parser.add_argument('--download-past-media', action='store_true',
                         help='download past media instead of dumping '
@@ -196,7 +197,7 @@ def find_dialog(dialogs, query, top=25, threshold=0.7):
             # If query is a substring of the name, make it a good match.
             # Slightly boost dialogs which were recently active, so not
             # all substring-matched dialogs have exactly the same score.
-            boost = (index/len(dialogs))/25
+            boost = (index / len(dialogs)) / 25
             name_score = max(name_score, 0.75 + boost)
         if getattr(dialog.entity, 'username', None):
             seq.set_seq1(dialog.entity.username)
@@ -273,12 +274,12 @@ async def main(loop):
     )
     if config.has_option('TelegramAPI', 'SecondFactorPassword'):
         client = await (TelegramClient(
-                absolute_session_name,
-                config['TelegramAPI']['ApiId'],
-                config['TelegramAPI']['ApiHash'],
-                loop=loop,
-                proxy=proxy
-            ).start(config['TelegramAPI']['PhoneNumber'], password=config['TelegramAPI']['SecondFactorPassword']))
+            absolute_session_name,
+            config['TelegramAPI']['ApiId'],
+            config['TelegramAPI']['ApiHash'],
+            loop=loop,
+            proxy=proxy
+        ).start(config['TelegramAPI']['PhoneNumber'], password=config['TelegramAPI']['SecondFactorPassword']))
     else:
         client = await (TelegramClient(
             absolute_session_name,
@@ -295,8 +296,10 @@ async def main(loop):
 
     try:
         if args.download_past_media:
+            print('下载过往数据')
             await exporter.download_past_media()
         else:
+            print('下载最新数据')
             await exporter.start()
     except asyncio.CancelledError:
         # This should be triggered on KeyboardInterrupt's to prevent ugly

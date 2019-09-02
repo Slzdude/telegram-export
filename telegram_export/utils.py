@@ -1,8 +1,10 @@
 """Utility functions for telegram-export which aren't specific to one purpose"""
 import mimetypes
+import re
 
 from telethon.tl import types
 from urllib.parse import urlparse
+
 try:
     import socks
 except ImportError:
@@ -130,11 +132,11 @@ def get_extension(mime):
     """
     if not mime:
         mime = ''
-    
+
     return (
-        COMMON_MIME_TO_EXTENSION.get(mime)
-        or mimetypes.guess_extension(mime)
-        or '.bin'
+            COMMON_MIME_TO_EXTENSION.get(mime)
+            or mimetypes.guess_extension(mime)
+            or '.bin'
     )
 
 
@@ -231,7 +233,7 @@ def parse_proxy_str(proxy_str):
     url_parser = urlparse(proxy_str)
     proxy_type = None
     proxy_type_str = url_parser.scheme
-    
+
     if proxy_type_str.lower() == "socks5":
         proxy_type = socks.SOCKS5
     elif proxy_type_str.lower() == "socks4":
@@ -259,3 +261,9 @@ def parse_proxy_str(proxy_str):
     else:
         proxy = (proxy_type, host, port)
     return proxy
+
+
+def fix_windows_filename(title):
+    rstr = r"[\/\\\:\*\?\"\<\>\|]"  # '/ \ : * ? " < > |'
+    new_title = re.sub(rstr, "_", title)  # 替换为下划线
+    return new_title

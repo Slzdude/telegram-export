@@ -7,22 +7,22 @@ import os
 import time
 from collections import defaultdict
 
+import arrow
 import tqdm
 from telethon import utils
-from telethon.errors import ChatAdminRequiredError
+from telethon.errors import ChatAdminRequiredError, ChatWriteForbiddenError
 from telethon.tl import types, functions
 
+from telegram_export.utils import fix_windows_filename
 from . import utils as export_utils
 
 __log__ = logging.getLogger(__name__)
-
 
 VALID_TYPES = {
     'photo', 'document', 'video', 'audio', 'sticker', 'voice', 'chatphoto'
 }
 BAR_FORMAT = "{l_bar}{bar}| {n_fmt}/{total_fmt} " \
              "[{elapsed}<{remaining}, {rate_noinv_fmt}{postfix}]"
-
 
 QUEUE_TIMEOUT = 5
 DOWNLOAD_PART_SIZE = 256 * 1024
@@ -31,7 +31,7 @@ DOWNLOAD_PART_SIZE = 256 * 1024
 # should be tuned to adjust (n requests/time spent + flood time).
 USER_FULL_DELAY = 1.5
 CHAT_FULL_DELAY = 1.5
-MEDIA_DELAY = 3.0
+MEDIA_DELAY = 1.0  # 3.0
 HISTORY_DELAY = 1.0
 
 
@@ -40,6 +40,7 @@ class Downloader:
     Download dialogs and their associated data, and dump them.
     Make Telegram API requests and sleep for the appropriate time.
     """
+
     def __init__(self, client, config, dumper, loop):
         self.client = client
         self.loop = loop or asyncio.get_event_loop()
@@ -47,8 +48,7 @@ class Downloader:
         self.types = {x.strip().lower()
                       for x in (config.get('MediaWhitelist') or '').split(',')
                       if x.strip()}
-        self.media_fmt = os.path.join(config['OutputDirectory'],
-                                      config['MediaFilenameFmt'])
+        self.media_fmt = os.path.join(config['OutputDirectory'], config['MediaFilenameFmt'])
         assert all(x in VALID_TYPES for x in self.types)
         if self.types:
             self.types.add('unknown')  # Always allow "unknown" media types
@@ -84,6 +84,8 @@ class Downloader:
             return False
         if not self.types:
             return True
+        if not getattr(media, 'document', None) or getattr(media.document, 'size', 0) > self.max_size:
+            return False
         return export_utils.get_media_type(media) in self.types
 
     def _dump_full_entity(self, entity):
@@ -245,9 +247,7 @@ class Downloader:
             filename, ext = os.path.splitext(filename)
         else:
             # No filename at all, set a sensible default filename
-            filename = date.strftime(
-                '{}_%Y-%m-%d_%H-%M-%S'.format(formatter['type'])
-            )
+            filename = arrow.get(date).format('YYYYMMDDHHmmssSSS')
 
         # The saved media didn't have a filename and we set our own.
         # Detect a sensible extension from the known mimetype.
@@ -255,14 +255,14 @@ class Downloader:
             ext = export_utils.get_extension(media_row[4])
 
         # Apply the date to the user format string and then replace the map
-        formatter['filename'] = filename
+        formatter['filename'] = fix_windows_filename(filename)
         filename = date.strftime(self.media_fmt).format_map(formatter)
         filename += '.{}{}'.format(media_id, ext)
         if os.path.isfile(filename):
             __log__.debug('Skipping already-existing file %s', filename)
             return
 
-        __log__.debug('Downloading to %s', filename)
+        __log__.info('Downloading %s to %s', media_type, filename)
         os.makedirs(os.path.dirname(filename), exist_ok=True)
         if media_type == 'document':
             location = types.InputDocumentFileLocation(
@@ -441,9 +441,9 @@ class Downloader:
             )
 
             can_get_participants = (
-                isinstance(target_in, types.InputPeerChat)
-                or (isinstance(target, types.Channel)
-                    and (target.megagroup or target.admin_rights is not None))
+                    isinstance(target_in, types.InputPeerChat)
+                    or (isinstance(target, types.Channel)
+                        and (target.megagroup or target.admin_rights is not None))
             )
             if can_get_participants:
                 try:
@@ -477,6 +477,8 @@ class Downloader:
                     await self.client(log_req)
                     log_req.limit = 100
                 except ChatAdminRequiredError:
+                    log_req = None
+                except ChatWriteForbiddenError:
                     log_req = None
             else:
                 log_req = None
@@ -515,7 +517,7 @@ class Downloader:
                 # the highest ID ("closest" bound we need to reach), stop.
                 if count < req.limit or req.offset_id <= stop_at:
                     __log__.debug('Received less messages than limit, done.')
-                    max_id = self.dumper.get_max_message_id(target_id) or 0 # can't have NULL
+                    max_id = self.dumper.get_max_message_id(target_id) or 0  # can't have NULL
                     self.dumper.save_resume(target_id, stop_at=max_id)
                     break
 
