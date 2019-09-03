@@ -3,5 +3,4 @@ appdirs
 telethon~=1.4.3
 tqdm
 PySocks
-sqlalchemy
-pymysql
+pymongo

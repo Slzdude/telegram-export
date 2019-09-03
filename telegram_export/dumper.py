@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """A module for dumping export data into the database"""
 import json
 import logging
@@ -6,14 +5,18 @@ import sqlite3
 import sys
 import time
 from base64 import b64encode
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 import os.path
 
 import arrow
+import pymongo
+from pymongo import UpdateOne
 from telethon.tl import types
 from telethon.utils import get_peer_id, resolve_id, get_input_peer
 
+from telegram_export.database import db, DB_SELFINFO, DB_ADMIN_LOG, DB_MESSAGE, DB_USER, DB_CHANNEL, DB_SUPERGROUP, \
+    DB_CHATPARTICIPANTS, DB_MEDIA, DB_FORWARD, DB_RESUME, DB_RESUMEMEDIA, DB_RESUMEENTITY
 from . import utils
 
 logger = logging.getLogger(__name__)
@@ -79,172 +82,6 @@ class Dumper:
 
         self._dump_callbacks = {method: set() for method in self.dump_methods}
 
-        c.execute("SELECT name FROM sqlite_master "
-                  "WHERE type='table' AND name='Version'")
-
-        exists = bool(c.fetchone())
-        if exists:
-            # Tables already exist, check for the version
-            c.execute("SELECT Version FROM Version")
-            version = c.fetchone()
-            if not version:
-                # Sometimes there may be a table without values (see #55)
-                c.execute("DROP TABLE IF EXISTS Version")
-                exists = False
-            elif version[0] != DB_VERSION:
-                self._upgrade_database(old=version[0])
-                self.conn.commit()
-        if not exists:
-            # Tables don't exist, create new ones
-            c.execute("CREATE TABLE Version (Version INTEGER)")
-            c.execute("CREATE TABLE SelfInformation (UserID INTEGER)")
-            c.execute("INSERT INTO Version VALUES (?)", (DB_VERSION,))
-
-            c.execute("CREATE TABLE Forward("
-                      "ID INTEGER PRIMARY KEY AUTOINCREMENT,"
-                      "OriginalDate INT NOT NULL,"
-                      "FromID INT,"  # User or Channel ID
-                      "ChannelPost INT,"
-                      "PostAuthor TEXT)")
-
-            # For InputFileLocation:
-            #   local_id -> LocalID
-            #   volume_id -> VolumeID
-            #   secret -> Secret
-            #
-            # For InputDocumentFileLocation:
-            #   id -> LocalID
-            #   access_hash -> Secret
-            #   version -> VolumeID
-            c.execute("CREATE TABLE Media("
-                      "ID INTEGER PRIMARY KEY AUTOINCREMENT,"
-                      # Basic useful information, if available
-                      "Name TEXT,"
-                      "MimeType TEXT,"
-                      "Size INT,"
-                      "ThumbnailID INT,"
-                      "Type TEXT,"
-                      # Fields required to download the file
-                      "LocalID INT,"
-                      "VolumeID INT,"
-                      "Secret INT,"
-                      # Whatever else as JSON here
-                      "Extra TEXT,"
-                      "FOREIGN KEY (ThumbnailID) REFERENCES Media(ID))")
-
-            c.execute("CREATE TABLE User("
-                      "ID INT NOT NULL,"
-                      "DateUpdated INT NOT NULL,"
-                      "FirstName TEXT NOT NULL,"
-                      "LastName TEXT,"
-                      "Username TEXT,"
-                      "Phone TEXT,"
-                      "Bio TEXT,"
-                      "Bot INTEGER,"
-                      "CommonChatsCount INT NOT NULL,"
-                      "PictureID INT,"
-                      "FOREIGN KEY (PictureID) REFERENCES Media(ID),"
-                      "PRIMARY KEY (ID, DateUpdated))")
-
-            c.execute("CREATE TABLE Channel("
-                      "ID INT NOT NULL,"
-                      "DateUpdated INT NOT NULL,"
-                      "About TEXT,"
-                      "Title TEXT NOT NULL,"
-                      "Username TEXT,"
-                      "PictureID INT,"
-                      "PinMessageID INT,"
-                      "FOREIGN KEY (PictureID) REFERENCES Media(ID),"
-                      "PRIMARY KEY (ID, DateUpdated))")
-
-            c.execute("CREATE TABLE Supergroup("
-                      "ID INT NOT NULL,"
-                      "DateUpdated INT NOT NULL,"
-                      "About TEXT,"
-                      "Title TEXT NOT NULL,"
-                      "Username TEXT,"
-                      "PictureID INT,"
-                      "PinMessageID INT,"
-                      "FOREIGN KEY (PictureID) REFERENCES Media(ID),"
-                      "PRIMARY KEY (ID, DateUpdated))")
-
-            c.execute("CREATE TABLE Chat("
-                      "ID INT NOT NULL,"
-                      "DateUpdated INT NOT NULL,"
-                      "Title TEXT NOT NULL,"
-                      "MigratedToID INT,"
-                      "PictureID INT,"
-                      "FOREIGN KEY (PictureID) REFERENCES Media(ID),"
-                      "PRIMARY KEY (ID, DateUpdated))")
-
-            c.execute("CREATE TABLE ChatParticipants("
-                      "ContextID INT NOT NULL,"
-                      "DateUpdated INT NOT NULL,"
-                      "Added TEXT NOT NULL,"
-                      "Removed TEXT NOT NULL,"
-                      "PRIMARY KEY (ContextID, DateUpdated))")
-
-            c.execute("CREATE TABLE Message("
-                      "ID INT NOT NULL,"
-                      "ContextID INT NOT NULL,"
-                      "Date INT NOT NULL,"
-                      "FromID INT,"
-                      "Message TEXT,"
-                      "ReplyMessageID INT,"
-                      "ForwardID INT,"
-                      "PostAuthor TEXT,"
-                      "ViewCount INT,"
-                      "MediaID INT,"
-                      "Formatting TEXT,"  # e.g. bold, italic, etc.
-                      "ServiceAction TEXT,"  # friendly name of action if it is
-                      # a MessageService
-                      "FOREIGN KEY (ForwardID) REFERENCES Forward(ID),"
-                      "FOREIGN KEY (MediaID) REFERENCES Media(ID),"
-                      "PRIMARY KEY (ID, ContextID))")
-
-            c.execute("CREATE TABLE AdminLog("
-                      "ID INT NOT NULL,"
-                      "ContextID INT NOT NULL,"
-                      "Date INT NOT NULL,"
-                      "UserID INT,"
-                      "MediaID1 INT,"  # e.g. new photo
-                      "MediaID2 INT,"  # e.g. old photo
-                      "Action TEXT,"  # Friendly name for the action
-                      "Data TEXT,"  # JSON data of the entire action
-                      "FOREIGN KEY (MediaID1) REFERENCES Media(ID),"
-                      "FOREIGN KEY (MediaID2) REFERENCES Media(ID),"
-                      "PRIMARY KEY (ID, ContextID))")
-
-            c.execute("CREATE TABLE Resume("
-                      "ContextID INT NOT NULL,"
-                      "ID INT NOT NULL,"
-                      "Date INT NOT NULL,"
-                      "StopAt INT NOT NULL,"
-                      "PRIMARY KEY (ContextID))")
-
-            c.execute("CREATE TABLE ResumeEntity("
-                      "ContextID INT NOT NULL,"
-                      "ID INT NOT NULL,"
-                      "AccessHash INT,"
-                      "PRIMARY KEY (ContextID, ID))")
-
-            c.execute("CREATE TABLE ResumeMedia("
-                      "MediaID INT NOT NULL,"
-                      "ContextID INT NOT NULL,"
-                      "SenderID INT,"
-                      "Date INT,"
-                      "PRIMARY KEY (MediaID))")
-            self.conn.commit()
-
-    def _upgrade_database(self, old):
-        """
-        This method knows how to migrate from old -> DB_VERSION.
-
-        Currently it performs no operation because this is the
-        first version of the tables, in the future it should alter
-        tables or somehow transfer the data between what changed.
-        """
-
     # TODO make these callback functions less repetitive.
     # For the most friendly API, we should  have different methods for each
     # kind of callback, but there could be a way to make this cleaner.
@@ -282,17 +119,12 @@ class Dumper:
         Checks the self ID. If there is a stored ID and it doesn't match the
         given one, an error message is printed and the application exits.
         """
-        cur = self.conn.cursor()
-        cur.execute("SELECT UserID FROM SelfInformation")
-        result = cur.fetchone()
-        if result:
-            if result[0] != self_id:
-                print('This export database belongs to another user!',
-                      file=sys.stderr)
-                exit(1)
-        else:
-            cur.execute("INSERT INTO SelfInformation VALUES (?)", (self_id,))
-            self.commit()
+        col = db.get_collection(DB_SELFINFO)
+        ret = col.find_one()
+        if ret and ret.get('user_id') != self_id:
+            print('This export database belongs to another user!', file=sys.stderr)
+            exit(1)
+        col.update_one({'user_id': self_id}, {'$set': {'user_id': self_id}}, upsert=True)
 
     def dump_message(self, message, context_id, forward_id, media_id):
         """
@@ -325,8 +157,13 @@ class Dumper:
 
         for callback in self._dump_callbacks['message']:
             callback(row)
-
-        return self._insert('Message', row)
+        msg_col = db.get_collection(DB_MESSAGE)
+        ret = msg_col.update_one({'id': row[0]}, {'$set': dict(zip([
+            'id', 'context_id', 'date', 'from_id', 'message',
+            'reply_message_id', 'forward_id', 'post_author', 'view_count',
+            'media_id', 'formatting', 'service_action'
+        ], row))}, upsert=True)
+        return ret
 
     def dump_message_service(self, message, context_id, media_id):
         """Similar to self.dump_message, but for MessageAction's."""
@@ -355,7 +192,13 @@ class Dumper:
         for callback in self._dump_callbacks['message_service']:
             callback(row)
 
-        return self._insert('Message', row)
+        msg_col = db.get_collection(DB_MESSAGE)
+        ret = msg_col.update_one({'id': row[0]}, {'$set': dict(zip([
+            'id', 'context_id', 'date', 'from_id', 'message',
+            'reply_message_id', 'forward_id', 'post_author', 'view_count',
+            'media_id', 'formatting', 'service_action'
+        ], row))}, upsert=True)
+        return ret
 
     def dump_admin_log_event(self, event, context_id, media_id1, media_id2):
         """Similar to self.dump_message_service but for channel actions."""
@@ -368,41 +211,46 @@ class Dumper:
         sanitize_dict(extra)
         extra = json.dumps(extra)
 
-        row = (event.id,
-               context_id,
-               event.date.timestamp(),
-               event.user_id,
-               media_id1,
-               media_id2,
-               name,
-               extra)
+        row = (event.id, context_id, event.date.timestamp(), event.user_id,
+               media_id1, media_id2, name, extra)
 
         for callback in self._dump_callbacks['adminlog_event']:
             callback(row)
 
-        return self._insert('AdminLog', row)
+        admin_log_col = db.get_collection(DB_ADMIN_LOG)
+        ret = admin_log_col.update_one({'id': row[0]}, {'$set': dict(zip([
+            'id', 'context_id', 'date', 'user_id',
+            'media_id_1', 'media_id_2', 'action', 'data'
+        ], row))}, upsert=True)
+        return ret
 
     def dump_user(self, user_full, photo_id, timestamp=None):
         """Dump a UserFull into the User table
         Params: UserFull to dump, MediaID of the profile photo in the DB
         Returns -, or False if not added"""
         # Rationale for UserFull rather than User is to get bio
-        values = (user_full.user.id,
-                  timestamp or round(time.time()),
-                  user_full.user.first_name,
-                  user_full.user.last_name,
-                  user_full.user.username,
-                  user_full.user.phone,
-                  user_full.about,
-                  user_full.user.bot,
-                  user_full.common_chats_count,
-                  photo_id)
+        row = (user_full.user.id,
+               timestamp or round(time.time()),
+               user_full.user.first_name,
+               user_full.user.last_name,
+               user_full.user.username,
+               user_full.user.phone,
+               user_full.about,
+               user_full.user.bot,
+               user_full.common_chats_count,
+               photo_id)
 
         for callback in self._dump_callbacks['user']:
-            callback(values)
+            callback(row)
 
-        return self._insert_if_valid_date('User', values, date_column=1,
-                                          where=('ID', user_full.user.id))
+        user_col = db.get_collection(DB_USER)
+        ret = user_col.find_one({'id': row[0]})
+        if not ret or time.time() - ret['date_updated'] > self.invalidation_time:
+            ret = user_col.update_one({'id': row[0]}, {'$set': dict(zip([
+                'id', 'date_updated', 'first_name', 'last_name', 'username',
+                'phone', 'about', 'bot', 'common_chats_count', 'photo_id'
+            ], row))}, upsert=True)
+        return ret
 
     def dump_channel(self, channel_full, channel, photo_id, timestamp=None):
         """Dump a Channel into the Channel table.
@@ -410,19 +258,25 @@ class Dumper:
                 of the profile photo in the DB
         Returns -"""
         # Need to get the full object too for 'about' info
-        values = (get_peer_id(channel),
-                  timestamp or round(time.time()),
-                  channel_full.about,
-                  channel.title,
-                  channel.username,
-                  photo_id,
-                  channel_full.pinned_msg_id)
+        row = (get_peer_id(channel),
+               timestamp or round(time.time()),
+               channel_full.about,
+               channel.title,
+               channel.username,
+               photo_id,
+               channel_full.pinned_msg_id)
 
         for callback in self._dump_callbacks['channel']:
-            callback(values)
+            callback(row)
 
-        return self._insert_if_valid_date('Channel', values, date_column=1,
-                                          where=('ID', get_peer_id(channel)))
+        channel_col = db.get_collection(DB_CHANNEL)
+        ret = channel_col.find_one({'id': row[0]})
+        if not ret or time.time() - ret['date_updated'] > self.invalidation_time:
+            ret = channel_col.update_one({'id': row[0]}, {'$set': dict(zip([
+                'id', 'date_updated', 'about', 'title', 'username',
+                'photo_id', 'pin_message_id'
+            ], row))}, upsert=True)
+        return ret
 
     def dump_supergroup(self, supergroup_full, supergroup, photo_id,
                         timestamp=None):
@@ -431,19 +285,25 @@ class Dumper:
                 of the profile photo in the DB.
         Returns -"""
         # Need to get the full object too for 'about' info
-        values = (get_peer_id(supergroup),
-                  timestamp or round(time.time()),
-                  getattr(supergroup_full, 'about', None) or '',
-                  supergroup.title,
-                  supergroup.username,
-                  photo_id,
-                  supergroup_full.pinned_msg_id)
+        row = (get_peer_id(supergroup),
+               timestamp or round(time.time()),
+               getattr(supergroup_full, 'about', None) or '',
+               supergroup.title,
+               supergroup.username,
+               photo_id,
+               supergroup_full.pinned_msg_id)
 
         for callback in self._dump_callbacks['supergroup']:
-            callback(values)
+            callback(row)
 
-        return self._insert_if_valid_date('Supergroup', values, date_column=1,
-                                          where=('ID', get_peer_id(supergroup)))
+        supergroup_col = db.get_collection(DB_SUPERGROUP)
+        ret = supergroup_col.find_one({'id': row[0]})
+        if not ret or time.time() - ret['date_updated'] > self.invalidation_time:
+            ret = supergroup_col.update_one({'id': row[0]}, {'$set': dict(zip([
+                'id', 'date_updated', 'about', 'title', 'username',
+                'photo_id', 'pin_message_id'
+            ], row))}, upsert=True)
+        return ret
 
     def dump_chat(self, chat, photo_id, timestamp=None):
         """Dump a Chat into the Chat table
@@ -454,17 +314,22 @@ class Dumper:
         else:
             migrated_to_id = None
 
-        values = (get_peer_id(chat),
-                  timestamp or round(time.time()),
-                  chat.title,
-                  migrated_to_id,
-                  photo_id)
+        row = (get_peer_id(chat),
+               timestamp or round(time.time()),
+               chat.title,
+               migrated_to_id,
+               photo_id)
 
         for callback in self._dump_callbacks['chat']:
-            callback(values)
+            callback(row)
 
-        return self._insert_if_valid_date('Chat', values, date_column=1,
-                                          where=('ID', get_peer_id(chat)))
+        chat_col = db.get_collection(DB_SUPERGROUP)
+        ret = chat_col.find_one({'id': row[0]})
+        if not ret or time.time() - ret['date_updated'] > self.invalidation_time:
+            ret = chat_col.update_one({'id': row[0]}, {'$set': dict(zip([
+                'id', 'date_updated', 'title', 'migrated_to_id', 'photo_id'
+            ], row))}, upsert=True)
+        return ret
 
     def dump_participants_delta(self, context_id, ids):
         """
@@ -472,36 +337,34 @@ class Dumper:
         and the current input user IDs.
         """
         ids = set(ids)
-        c = self.conn.cursor()
-        c.execute('SELECT Added, Removed FROM ChatParticipants '
-                  'WHERE ContextID = ? ORDER BY DateUpdated ASC',
-                  (context_id,))
-
-        row = c.fetchone()
-        if not row:
+        chat_party = db.get_collection(DB_CHATPARTICIPANTS)
+        ret = chat_party.find({'context_id': context_id}).sort([('date_updated', pymongo.ASCENDING)])
+        print(ret)
+        if not ret:
             added = ids
             removed = set()
         else:
             # Build the last known list of participants from the saved deltas
-            last_ids = set(int(x) for x in row[0].split(','))
-            row = c.fetchone()
-            while row:
-                added = set(int(x) for x in row[0].split(',') if x != '')
-                removed = set(int(x) for x in row[1].split(',') if x != '')
+            last_ids = ret[0]['added']
+            for row in ret[1:]:
+                last_ids = row['added']
+                added = row['added']
+                removed = row['removed']
                 last_ids = (last_ids | added) - removed
-                row = c.fetchone()
             added = ids - last_ids
             removed = last_ids - ids
 
         row = (context_id,
                round(time.time()),
-               ','.join(str(x) for x in added),
-               ','.join(str(x) for x in removed))
+               list(added),
+               list(removed))
 
         for callback in self._dump_callbacks['participants_delta']:
             callback(row)
 
-        c.execute("INSERT INTO ChatParticipants VALUES (?, ?, ?, ?)", row)
+        chat_party.insert(dict(zip([
+            'context_id', 'date_updated', 'added', 'removed'
+        ], row)))
         return added, removed
 
     def dump_media(self, media, media_type=None):
@@ -651,22 +514,15 @@ class Dumper:
 
             for callback in self._dump_callbacks['media']:
                 callback(row)
-
-            c = self.conn.cursor()
-            c.execute('SELECT ID FROM Media WHERE LocalID = ? '
-                      'AND VolumeID = ? AND Secret = ?',
-                      (row['local_id'], row['volume_id'], row['secret']))
-            existing_row = c.fetchone()
-            if existing_row:
-                return existing_row[0]
-
-            return self._insert('Media', (
-                None,
-                row['name'], row['mime_type'], row['size'],
-                row['thumbnail_id'], row['type'],
-                row['local_id'], row['volume_id'], row['secret'],
-                row['extra']
-            ))
+            media_col = db.get_collection(DB_MEDIA)
+            ret = media_col.find_one({
+                'local_id': row['local_id'],
+                'volume_id': row['volume_id'],
+                'secret': row['secret']
+            })
+            if ret:
+                return ret
+            return media_col.insert(row)
 
     def dump_forward(self, forward):
         """
@@ -677,32 +533,27 @@ class Dumper:
         if not forward:
             return None
 
-        row = (None,  # Database will handle this
-               forward.date.timestamp(),
+        row = (forward.date.timestamp(),
                forward.from_id,
                forward.channel_post,
                forward.post_author)
 
         for callback in self._dump_callbacks['forward']:
             callback(row)
-
-        return self._insert('Forward', row)
+        ret = db[DB_FORWARD].insert(dict(zip(['id', 'original_date', 'from_id', 'channel_post', 'post_author'], row)))
+        return ret
 
     def get_max_message_id(self, context_id):
         """
         Returns the largest saved message ID for the given
         context_id, or 0 if no messages have been saved.
         """
-        row = self.conn.execute("SELECT MAX(ID) FROM Message WHERE "
-                                "ContextID = ?", (context_id,)).fetchone()
-        return row[0] if row else 0
+        ret = db[DB_MESSAGE].find_one({'context_id': context_id}, sort=[('id', -1)])
+        return ret['id']
 
     def get_message_count(self, context_id):
         """Gets the message count for the given context"""
-        tuple_ = self.conn.execute(
-            "SELECT COUNT(*) FROM MESSAGE WHERE ContextID = ?", (context_id,)
-        ).fetchone()
-        return tuple_[0] if tuple_ else 0
+        return db[DB_MESSAGE].find({'context_id': context_id}).count()
 
     def get_resume(self, context_id):
         """
@@ -710,9 +561,7 @@ class Dumper:
         ID and offset date from which to continue, as well as at which ID
         to stop.
         """
-        c = self.conn.execute("SELECT ID, Date, StopAt FROM Resume WHERE "
-                              "ContextID = ?", (context_id,))
-        return c.fetchone() or (0, 0, 0)
+        return db[DB_RESUME].find_one({'context_id': context_id}) or {'id': 0, 'date': 0, 'stop_at': 0}
 
     def save_resume(self, context_id, msg=0, msg_date=0, stop_at=0):
         """
@@ -721,7 +570,7 @@ class Dumper:
         if isinstance(msg_date, datetime):
             msg_date = int(msg_date.timestamp())
 
-        return self._insert('Resume', (context_id, msg, msg_date, stop_at))
+        return db[DB_RESUME].insert({'context_id': context_id, 'id': msg, 'date': msg_date, 'stop_at': stop_at})
 
     def iter_resume_entities(self, context_id):
         """
@@ -729,21 +578,16 @@ class Dumper:
         given context_id. Note that the entities are *removed* once the
         iterator is consumed completely.
         """
-        c = self.conn.execute("SELECT ID, AccessHash FROM ResumeEntity "
-                              "WHERE ContextID = ?", (context_id,))
-        row = c.fetchone()
-        while row:
-            kind = resolve_id(row[0])[1]
+        rows = db[DB_RESUMEENTITY].find({'context_id': context_id})
+        for row in rows:
+            kind = resolve_id(row['id'])[1]
             if kind == types.PeerUser:
-                yield types.InputPeerUser(row[0], row[1])
+                yield types.InputPeerUser(row['id'], row['access_hash'])
             elif kind == types.PeerChat:
-                yield types.InputPeerChat(row[0])
+                yield types.InputPeerChat(row['id'])
             elif kind == types.PeerChannel:
-                yield types.InputPeerChannel(row[0], row[1])
-            row = c.fetchone()
-
-        c.execute("DELETE FROM ResumeEntity WHERE ContextID = ?",
-                  (context_id,))
+                yield types.InputPeerChannel(row['id'], row['access_hash'])
+        db[DB_RESUMEENTITY].delete_many({'context_id': context_id})
 
     def save_resume_entities(self, context_id, entities):
         """
@@ -753,14 +597,13 @@ class Dumper:
         for ent in entities:
             ent = get_input_peer(ent)
             if isinstance(ent, types.InputPeerUser):
-                rows.append((context_id, ent.user_id, ent.access_hash))
+                rows.append({'context_id': context_id, 'id': ent.user_id, 'access_hash': ent.access_hash})
             elif isinstance(ent, types.InputPeerChat):
-                rows.append((context_id, ent.chat_id, None))
+                rows.append({'context_id': context_id, 'id': ent.chat_id, 'access_hash': None})
             elif isinstance(ent, types.InputPeerChannel):
-                rows.append((context_id, ent.channel_id, ent.access_hash))
-        c = self.conn.cursor()
-        c.executemany("INSERT OR REPLACE INTO ResumeEntity "
-                      "VALUES (?,?,?)", rows)
+                rows.append({'context_id': context_id, 'id': ent.channel_id, 'access_hash': ent.access_hash})
+        if rows:
+            db[DB_RESUMEENTITY].insert_many(rows)
 
     def iter_resume_media(self, context_id):
         """
@@ -768,18 +611,11 @@ class Dumper:
         the given context_id. Note that the media rows are *removed* once
         the iterator is consumed completely.
         """
-        c = self.conn.execute(
-            "SELECT MediaID, SenderID, Date "
-            "FROM ResumeMedia WHERE ContextID = ?", (context_id,)
-        )
-        row = c.fetchone()
-        while row:
-            media_id, sender_id, date = row
+        ret = db[DB_RESUMEMEDIA].find({'context_id': context_id})
+        for row in ret:
+            media_id, sender_id, date = row['media_id'], row['sender_id'], row['date']
             yield media_id, sender_id, datetime.utcfromtimestamp(date)
-            row = c.fetchone()
-
-        c.execute("DELETE FROM ResumeMedia WHERE ContextID = ?",
-                  (context_id,))
+        db[DB_RESUMEMEDIA].delete_many({'context_id': context_id})
 
     def save_resume_media(self, media_tuples):
         """
@@ -788,59 +624,9 @@ class Dumper:
         The tuples should consist of four elements, these being
         ``(media_id, context_id, sender_id, date)``.
         """
-        self.conn.executemany("INSERT OR REPLACE INTO ResumeMedia "
-                              "VALUES (?,?,?,?)", media_tuples)
-
-    def _insert_if_valid_date(self, into, values, date_column, where):
-        """
-        Helper method to self._insert(into, values) after checking that the
-        given values are different than the latest dump or that the delta
-        between the current date and the existing column date_column is
-        bigger than the invalidation time. `where` is used to get the last
-        dumped item to check for invalidation time.
-
-        As an example, ("ID", 4) -> WHERE ID = ?, 4
-        """
-        last = self.conn.execute(
-            'SELECT * FROM {} WHERE {} = ? ORDER BY DateUpdated DESC'
-            .format(into, where[0]), (where[1],)
-        ).fetchone()
-
-        if last:
-            delta = values[date_column] - last[date_column]
-
-            # Note sqlite stores True as 1 and False
-            # as 0 but this is probably ok.
-            if len(values) != len(last):
-                raise TypeError(
-                    "values has a different number of columns to table"
-                )
-            rows_same = True
-            for i, val in enumerate(values):
-                if i != date_column and val != last[i]:
-                    rows_same = False
-
-            if delta < self.invalidation_time and rows_same:
-                return False
-        return self._insert(into, values)
-
-    def _insert(self, into, values):
-        """
-        Helper method to insert or replace the
-        given tuple of values into the given table.
-        """
-        try:
-            fmt = ','.join('?' * len(values))
-            c = self.conn.execute("INSERT OR REPLACE INTO {} VALUES ({})"
-                                  .format(into, fmt), values)
-            return c.lastrowid
-        except sqlite3.IntegrityError as error:
-            self.conn.rollback()
-            logger.error("Integrity error: %s", str(error))
-            raise
-
-    def commit(self):
-        """
-        Commits the changes made to the database to persist on disk.
-        """
-        self.conn.commit()
+        requests = []
+        for row in media_tuples:
+            requests.append(UpdateOne({'media_id': row[0]}, dict(zip([
+                'media_id', 'content_id', 'sender_id', 'date'], row)), upsert=True))
+        if requests:
+            db[DB_RESUMEMEDIA].bulk_write(requests)

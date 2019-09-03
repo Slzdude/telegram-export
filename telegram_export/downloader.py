@@ -13,6 +13,7 @@ from telethon import utils
 from telethon.errors import ChatAdminRequiredError, ChatWriteForbiddenError
 from telethon.tl import types, functions
 
+from telegram_export.database import DB_MEDIA, db, DB_USER, DB_SUPERGROUP, DB_CHANNEL, DB_MESSAGE
 from telegram_export.utils import fix_windows_filename
 from . import utils as export_utils
 
@@ -196,36 +197,28 @@ class Downloader:
         c = self.dumper.conn.cursor()
         _, kind = utils.resolve_id(peer_id)
         if kind == types.PeerUser:
-            row = c.execute('SELECT FirstName, LastName FROM User '
-                            'WHERE ID = ?', (peer_id,)).fetchone()
+            row = db[DB_USER].find_one({'id': peer_id})
             if row:
-                return '{} {}'.format(row[0] or '',
-                                      row[1] or '').strip()
+                return f'{row["first_name"] or ""} {row["last_name"] or ""}'.strip()
         elif kind == types.PeerChat:
-            row = c.execute('SELECT Title FROM Chat '
-                            'WHERE ID = ?', (peer_id,)).fetchone()
+            row = db[DB_USER].find_one({'id': peer_id})
             if row:
-                return row[0]
+                return row['title']
         elif kind == types.PeerChannel:
-            row = c.execute('SELECT Title FROM Channel '
-                            'WHERE ID = ?', (peer_id,)).fetchone()
+            row = db[DB_CHANNEL].find_one({'id': peer_id})
             if row:
-                return row[0]
-            row = c.execute('SELECT Title FROM Supergroup '
-                            'WHERE ID = ?', (peer_id,)).fetchone()
+                return row['title']
+            row = db[DB_SUPERGROUP].find_one({'id': peer_id})
             if row:
-                return row[0]
+                return row['title']
         return ''
 
     async def _download_media(self, media_id, context_id, sender_id, date,
                               bar):
-        media_row = self.dumper.conn.execute(
-            'SELECT LocalID, VolumeID, Secret, Type, MimeType, Name, Size '
-            'FROM Media WHERE ID = ?', (media_id,)
-        ).fetchone()
+        media_row = db[DB_MEDIA].find_one({'id': media_id})
         # Documents have attributes and they're saved under the "document"
         # namespace so we need to split it before actually comparing.
-        media_type = media_row[3].split('.')
+        media_type = media_row['type'].split('.')
         media_type, media_subtype = media_type[0], media_type[-1]
         if media_type not in ('photo', 'document'):
             return  # Only photos or documents are actually downloadable
@@ -242,7 +235,7 @@ class Downloader:
         # Documents might have a filename, which may have an extension. Use
         # the extension from the filename if any (more accurate than mime).
         ext = None
-        filename = media_row[5]
+        filename = media_row['name']
         if filename:
             filename, ext = os.path.splitext(filename)
         else:
@@ -252,7 +245,7 @@ class Downloader:
         # The saved media didn't have a filename and we set our own.
         # Detect a sensible extension from the known mimetype.
         if not ext:
-            ext = export_utils.get_extension(media_row[4])
+            ext = export_utils.get_extension(media_row['mime_type'])
 
         # Apply the date to the user format string and then replace the map
         formatter['filename'] = fix_windows_filename(filename)
@@ -266,15 +259,15 @@ class Downloader:
         os.makedirs(os.path.dirname(filename), exist_ok=True)
         if media_type == 'document':
             location = types.InputDocumentFileLocation(
-                id=media_row[0],
-                version=media_row[1],
-                access_hash=media_row[2]
+                id=media_row['local_id'],
+                version=media_row['volume_id'],
+                access_hash=media_row['secret']
             )
         else:
             location = types.InputFileLocation(
-                local_id=media_row[0],
-                volume_id=media_row[1],
-                secret=media_row[2]
+                local_id=media_row['local_id'],
+                volume_id=media_row['volume_id'],
+                secret=media_row['secret']
             )
 
         def progress(saved, total):
@@ -291,12 +284,12 @@ class Downloader:
                 # All chunks are of the same size and this isn't the last one
                 bar.update(DOWNLOAD_PART_SIZE)
 
-        if media_row[6] is not None:
-            bar.total += media_row[6]
+        if media_row['size'] is not None:
+            bar.total += media_row['size']
 
         self._incomplete_download = filename
         await self.client.download_file(
-            location, file=filename, file_size=media_row[6],
+            location, file=filename, file_size=media_row['size'],
             part_size_kb=DOWNLOAD_PART_SIZE // 1024,
             progress_callback=progress
         )
@@ -457,10 +450,8 @@ class Downloader:
                 except ChatAdminRequiredError:
                     __log__.info('Getting participants aborted (admin '
                                  'rights revoked while getting them).')
-
-            req.offset_id, req.offset_date, stop_at = self.dumper.get_resume(
-                target_id
-            )
+            ret = self.dumper.get_resume(target_id)
+            req.offset_id, req.offset_date, stop_at = ret['id'], ret['date'], ret['stop_at']
             if req.offset_id:
                 __log__.info('Resuming at %s (%s)',
                              req.offset_date, req.offset_id)
@@ -556,7 +547,7 @@ class Downloader:
             # Message loop complete, wait for the queues to empty
             msg_bar.n = msg_bar.total
             msg_bar.close()
-            self.dumper.commit()
+            # self.dumper.commit()
 
             # This loop is specific to the admin log (to finish up)
             while log_req and self._running:
@@ -604,8 +595,8 @@ class Downloader:
                 media.append(self._media_queue.get_nowait())
             self.dumper.save_resume_media(media)
 
-            if entities or media:
-                self.dumper.commit()
+            # if entities or media:
+            #     self.dumper.commit()
 
             # Delete partially-downloaded files
             if (self._incomplete_download is not None
@@ -628,18 +619,12 @@ class Downloader:
                         unit_scale=True, bar_format=BAR_FORMAT, total=0,
                         postfix={'chat': utils.get_display_name(target)})
 
-        msg_cursor = dumper.conn.cursor()
-        msg_cursor.execute('SELECT ID, Date, FromID, MediaID FROM Message '
-                           'WHERE ContextID = ? AND MediaID IS NOT NULL',
-                           (target_id,))
-
-        msg_row = msg_cursor.fetchone()
-        while msg_row:
+        rows = db[DB_MESSAGE].find({'context_id': target_id, "check": {'$ne': None}})
+        for row in rows:
             await self._download_media(
-                media_id=msg_row[3],
+                media_id=row['media_id'],
                 context_id=target_id,
-                sender_id=msg_row[2],
-                date=datetime.datetime.utcfromtimestamp(msg_row[1]),
+                sender_id=row['from_id'],
+                date=datetime.datetime.utcfromtimestamp(row['date']),
                 bar=bar
             )
-            msg_row = msg_cursor.fetchone()
