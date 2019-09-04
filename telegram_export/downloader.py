@@ -42,7 +42,7 @@ class Downloader:
     Make Telegram API requests and sleep for the appropriate time.
     """
 
-    def __init__(self, client, config, dumper, loop):
+    def __init__(self, client, config, dumper, loop=None):
         self.client = client
         self.loop = loop or asyncio.get_event_loop()
         self.max_size = config.getint('MaxSize')
@@ -85,7 +85,7 @@ class Downloader:
             return False
         if not self.types:
             return True
-        if not getattr(media, 'document', None) or getattr(media.document, 'size', 0) > self.max_size:
+        if not getattr(media, 'document', None):
             return False
         return export_utils.get_media_type(media) in self.types
 
@@ -194,7 +194,7 @@ class Downloader:
         if name:
             return name
 
-        c = self.dumper.conn.cursor()
+        # c = self.dumper.conn.cursor()
         _, kind = utils.resolve_id(peer_id)
         if kind == types.PeerUser:
             row = db[DB_USER].find_one({'id': peer_id})
@@ -215,7 +215,11 @@ class Downloader:
 
     async def _download_media(self, media_id, context_id, sender_id, date,
                               bar):
-        media_row = db[DB_MEDIA].find_one({'id': media_id})
+        media_row = db[DB_MEDIA].find_one({'_id': media_id})
+
+        if media_row['size'] and media_row['size'] > self.max_size:
+            return # 忽略过大的文件
+
         # Documents have attributes and they're saved under the "document"
         # namespace so we need to split it before actually comparing.
         media_type = media_row['type'].split('.')
@@ -518,7 +522,7 @@ class Downloader:
                     target_id, msg=req.offset_id, msg_date=req.offset_date,
                     stop_at=stop_at  # We DO want to preserve stop_at.
                 )
-                self.dumper.commit()
+                # self.dumper.commit()
 
                 chunks_left -= 1  # 0 means infinite, will reach -1 and never 0
                 if chunks_left == 0:

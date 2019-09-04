@@ -339,17 +339,16 @@ class Dumper:
         ids = set(ids)
         chat_party = db.get_collection(DB_CHATPARTICIPANTS)
         ret = chat_party.find({'context_id': context_id}).sort([('date_updated', pymongo.ASCENDING)])
-        print(ret)
-        if not ret:
+        if not ret.count():
             added = ids
             removed = set()
         else:
             # Build the last known list of participants from the saved deltas
-            last_ids = ret[0]['added']
+            last_ids = set(ret[0]['added'])
             for row in ret[1:]:
-                last_ids = row['added']
-                added = row['added']
-                removed = row['removed']
+                last_ids = set(row['added'])
+                added = set(row['added'])
+                removed = set(row['removed'])
                 last_ids = (last_ids | added) - removed
             added = ids - last_ids
             removed = last_ids - ids
@@ -521,8 +520,9 @@ class Dumper:
                 'secret': row['secret']
             })
             if ret:
-                return ret
-            return media_col.insert(row)
+                return ret['_id']
+            ret = media_col.insert(row)
+            return ret
 
     def dump_forward(self, forward):
         """
@@ -626,7 +626,7 @@ class Dumper:
         """
         requests = []
         for row in media_tuples:
-            requests.append(UpdateOne({'media_id': row[0]}, dict(zip([
-                'media_id', 'content_id', 'sender_id', 'date'], row)), upsert=True))
+            requests.append(UpdateOne({'media_id': row[0]}, {'$set': dict(zip([
+                'media_id', 'content_id', 'sender_id', 'date'], row))}, upsert=True))
         if requests:
             db[DB_RESUMEMEDIA].bulk_write(requests)

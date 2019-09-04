@@ -4,3 +4,4 @@ telethon~=1.4.3
 tqdm
 PySocks
 pymongo
+sanic

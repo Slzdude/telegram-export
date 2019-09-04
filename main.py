@@ -8,19 +8,17 @@ import configparser
 import difflib
 import logging
 import os
-import re
 from contextlib import suppress
 
 import tqdm
-import appdirs
 from telethon import TelegramClient, utils
-from telegram_export.utils import parse_proxy_str
 
 from telegram_export.dumper import Dumper
 from telegram_export.exporter import Exporter
 from telegram_export.formatters import NAME_TO_FORMATTER
+from telegram_export.utils import parse_proxy_str, parse_file_size
 
-logger = logging.getLogger('')  # Root logger
+logger = logging.getLogger('Root')  # Root logger
 
 NO_USERNAME = '<no username>'
 
@@ -98,18 +96,7 @@ def load_config(filename):
         config['Dumper'].getint('InvalidationTime', 7200) * 60)
 
     # Convert size to bytes
-    max_size = config['Dumper'].get('MaxSize')
-    m = re.match(r'(\d+(?:\.\d*)?)\s*([kmg]?b)?', max_size, re.IGNORECASE)
-    if not m:
-        raise ValueError('Invalid file size given for MaxSize')
-
-    max_size = int(float(m.group(1)) * {
-        'B': 1024 ** 0,
-        'KB': 1024 ** 1,
-        'MB': 1024 ** 2,
-        'GB': 1024 ** 3,
-    }.get((m.group(2) or 'MB').upper()))
-    config['Dumper']['MaxSize'] = str(max_size)
+    config['Dumper']['MaxSize'] = str(parse_file_size(config['Dumper'].get('MaxSize')))
     return config
 
 
@@ -159,8 +146,7 @@ def parse_args():
 
 def fmt_dialog(dialog, id_pad=0, username_pad=0):
     """
-    Space-fill a row with given padding values
-    to ensure alignment when printing dialogs.
+    使用给定的填充值填充空行以确保在打印对话框时对齐。
     """
     username = getattr(dialog.entity, 'username', None)
     username = '@' + username if username else NO_USERNAME
