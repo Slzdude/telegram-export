@@ -1,13 +1,11 @@
 """A class to iterate through dialogs and dump them, or save past media"""
 
-import logging
 import re
 
-# from async_generator import yield_, async_generator
-
-from telethon import utils
-
+from telegram_export.logger import create_logger
 from .downloader import Downloader
+
+logger = create_logger('exporter')
 
 
 async def entities_from_str(method, string):
@@ -47,61 +45,65 @@ async def get_entities_iter(mode, in_list, client):
 
 class Exporter:
     """A class to iterate through dialogs and dump them, or save past media"""
+
     def __init__(self, client, config, dumper, loop):
         self.client = client
+        self.config = config
         self.dumper = dumper
         self.downloader = Downloader(client, config['Dumper'], dumper, loop)
-        self.logger = logging.getLogger("exporter")
+        self.loop = loop
 
     async def close(self):
         """Gracefully close the exporter"""
         # Downloader handles its own graceful exit
-        self.logger.info("Closing exporter")
+        logger.info("Closing exporter")
         await self.client.disconnect()
-        self.dumper.conn.close()
+        logger.info("Finished!")
 
     async def start(self):
-        """Perform a dump of the dialogs we've been told to act on"""
-        self.logger.info("Saving to %s", self.dumper.config['OutputDirectory'])
+        """
+        开始下载
+        :return:
+        """
         self.dumper.check_self_user((await self.client.get_me(input_peer=True)).user_id)
         if 'Whitelist' in self.dumper.config:
-            # Only whitelist, don't even get the dialogs
-            async for entity in get_entities_iter('whitelist',
-                                                  self.dumper.config['Whitelist'],
-                                                  self.client):
+            logger.info("使用白名单模式进行下载")
+            async for entity in get_entities_iter('whitelist', self.dumper.config['Whitelist'], self.client):
                 await self.downloader.start(entity)
         elif 'Blacklist' in self.dumper.config:
-            # May be blacklist, so save the IDs on who to avoid
-            async for entity in get_entities_iter('blacklist',
-                                                  self.dumper.config['Blacklist'],
-                                                  self.client):
+            logger.info("使用黑名单模式进行下载")
+            async for entity in get_entities_iter('blacklist', self.dumper.config['Blacklist'], self.client):
                 await self.downloader.start(entity)
         else:
-            # Neither blacklist nor whitelist - get all
-            for dialog in await self.client.get_dialogs(limit=None):
+            logger.info("我全都要")
+            dialogs = await self.client.get_dialogs(limit=None)
+            logger.info(f"获取了{len(dialogs)}个对话")
+            for dialog in reversed(dialogs):
+                self.dumper.dump_dialog(dialog)
                 await self.downloader.start(dialog.entity)
 
     async def download_past_media(self):
         """
-        Download past media (media we saw but didn't download before) of the
-        dialogs we've been told to act on
+        下载我们看到过但之前没有下载的文件
+        :return:
         """
-        self.logger.info("Saving to %s", self.dumper.config['OutputDirectory'])
         self.dumper.check_self_user((await self.client.get_me(input_peer=True)).user_id)
-
         if 'Whitelist' in self.dumper.config:
-            # Only whitelist, don't even get the dialogs
-            async for entity in get_entities_iter('whitelist',
-                                                  self.dumper.config['Whitelist'],
-                                                  self.client):
+            logger.info("使用白名单模式进行下载")
+            async for entity in get_entities_iter('whitelist', self.dumper.config['Whitelist'], self.client):
                 await self.downloader.download_past_media(self.dumper, entity)
         elif 'Blacklist' in self.dumper.config:
-            # May be blacklist, so save the IDs on who to avoid
-            async for entity in get_entities_iter('blacklist',
-                                                  self.dumper.config['Blacklist'],
-                                                  self.client):
+            logger.info("使用黑名单模式进行下载")
+            async for entity in get_entities_iter('blacklist', self.dumper.config['Blacklist'], self.client):
                 await self.downloader.download_past_media(self.dumper, entity)
         else:
-            # Neither blacklist nor whitelist - get all
+            logger.info("我全都要")
             for dialog in await self.client.get_dialogs(limit=None):
                 await self.downloader.download_past_media(self.dumper, dialog.entity)
+
+    def info(self):
+        return {
+            'message': self.downloader.running_message.to_dict(),
+            'entity': self.downloader.running_entity.to_dict(),
+            'media': [{key: value.to_dict()} for key, value in self.downloader.running_media_list.items()]
+        }
