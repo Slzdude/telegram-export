@@ -151,7 +151,7 @@ class TestDumpAll(unittest.TestCase):
         self.client.disconnect()
 
     def test_dump_methods(self):
-        """Test dumper.dump_* works"""
+        """Test await dumper.dump_* works"""
         dumper = Dumper(self.dumper_config)
         message = types.Message(
             id=777,
@@ -165,8 +165,8 @@ class TestDumpAll(unittest.TestCase):
                 from_id=321
             )
         )
-        fwd_id = dumper.dump_forward(message.fwd_from)
-        dumper.dump_message(message, 123, forward_id=fwd_id, media_id=None)
+        fwd_id = await dumper.dump_forward(message.fwd_from)
+        await dumper.dump_message(message, 123, forward_id=fwd_id, media_id=None)
 
         message = types.Message(
             id=778,
@@ -199,9 +199,9 @@ class TestDumpAll(unittest.TestCase):
                 )
             )
         )
-        loc = dumper.dump_media(message.media)
-        dumper.dump_message(message, 123, forward_id=None, media_id=loc)
-        dumper.dump_message_service(context_id=123, media_id=loc, message=types.MessageService(
+        loc = await dumper.dump_media(message.media)
+        await dumper.dump_message(message, 123, forward_id=None, media_id=loc)
+        await dumper.dump_message_service(context_id=123, media_id=loc, message=types.MessageService(
             id=779,
             to_id=123,
             date=datetime.now(),
@@ -216,7 +216,7 @@ class TestDumpAll(unittest.TestCase):
             username='justme',
             phone='1234567'
         )
-        dumper.dump_user(photo_id=None, user_full=types.UserFull(
+        await dumper.dump_user(photo_id=None, user_full=types.UserFull(
             user=me,
             link=types.contacts.Link(
                 my_link=types.ContactLinkContact(),
@@ -226,7 +226,7 @@ class TestDumpAll(unittest.TestCase):
             notify_settings=types.PeerNotifySettings(0, 'beep'),
             common_chats_count=3
         ))
-        dumper.dump_chat(photo_id=None, chat=types.Chat(
+        await dumper.dump_chat(photo_id=None, chat=types.Chat(
             id=7264,
             title='Chat',
             photo=types.ChatPhotoEmpty(),
@@ -255,8 +255,8 @@ class TestDumpAll(unittest.TestCase):
             exported_invite=types.ChatInviteEmpty(),
             bot_info=[]
         )
-        dumper.dump_supergroup(channel_full, channel, photo_id=None)
-        dumper.dump_channel(channel_full, channel, photo_id=None)
+        await dumper.dump_supergroup(channel_full, channel, photo_id=None)
+        await dumper.dump_channel(channel_full, channel, photo_id=None)
 
     def test_dump_msg_entities(self):
         """Show that entities are correctly parsed and stored"""
@@ -270,7 +270,7 @@ class TestDumpAll(unittest.TestCase):
         fmt = BaseFormatter(dumper.conn)
 
         # Test with no entities
-        dumper.dump_message(message, 123, None, None)
+        await dumper.dump_message(message, 123, None, None)
         dumper.commit()
         assert not next(fmt.get_messages_from_context(123, order='DESC')).formatting
 
@@ -287,7 +287,7 @@ class TestDumpAll(unittest.TestCase):
         message.date -= timedelta(days=1)
         message.message = text
         message.entities = entities
-        dumper.dump_message(message, 123, None, None)
+        await dumper.dump_message(message, 123, None, None)
         dumper.commit()
         msg = next(fmt.get_messages_from_context(123, order='ASC'))
         assert utils.decode_msg_entities(msg.formatting) == message.entities
@@ -309,7 +309,7 @@ class TestDumpAll(unittest.TestCase):
 
         fmt = BaseFormatter(dumper.conn)
         for month in range(1, 13):
-            dumper.dump_chat(chat, None, timestamp=int(datetime(
+            await dumper.dump_chat(chat, None, timestamp=int(datetime(
                 year=2010, month=month, day=1
             ).timestamp()))
         dumper.commit()
@@ -340,7 +340,7 @@ class TestDumpAll(unittest.TestCase):
             message='hi'
         )
         for _ in range(365):
-            dumper.dump_message(msg, 123, forward_id=None, media_id=None)
+            await dumper.dump_message(msg, 123, forward_id=None, media_id=None)
             msg.id += 1
             msg.date += timedelta(days=1)
             msg.to_id = 300 - msg.to_id  # Flip between two IDs

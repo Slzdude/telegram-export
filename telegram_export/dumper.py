@@ -6,7 +6,6 @@ from datetime import datetime
 from enum import Enum
 
 import arrow
-import pymongo
 from pymongo import UpdateOne
 from telethon.tl import types
 from telethon.utils import get_peer_id, resolve_id, get_input_peer
@@ -77,7 +76,7 @@ class Dumper:
         Add the callback function to the set of callbacks for the given
         dump method. dump_method should be a string, and callback should be a
         function which takes one argument - a tuple which will be dumped into
-        the database. The list of valid dump methods is dumper.dump_methods.
+        the database. The list of valid dump methods is await dumper.dump_methods.
         If the dumper does not dump a row due to the invalidation_time, the
         callback will still be called.
         """
@@ -101,19 +100,19 @@ class Dumper:
 
         self._dump_callbacks[dump_method].remove(callback)
 
-    def check_self_user(self, self_id):
+    async def check_self_user(self, self_id):
         """
         Checks the self ID. If there is a stored ID and it doesn't match the
         given one, an error message is printed and the application exits.
         """
-        ret = db_self_info.find_one()
+        ret = await db_self_info.find_one()
         if ret and ret.get('user_id') != self_id:
             logger.error('数据库归属于其他用户！')
             exit(1)
-        db_self_info.update_one({'user_id': self_id}, {'$set': {'user_id': self_id}}, upsert=True)
+        await db_self_info.update_one({'user_id': self_id}, {'$set': {'user_id': self_id}}, upsert=True)
         logger.info('数据用户身份校验通过！')
 
-    def dump_dialog(self, dialog):
+    async def dump_dialog(self, dialog):
         row = {
             'id': dialog.id,
             'name': dialog.name,
@@ -126,9 +125,9 @@ class Dumper:
 
         for callback in self._dump_callbacks['message']:
             callback(row)
-        return update_by_id(db_dialog, row)
+        return await update_by_id(db_dialog, row)
 
-    def dump_message(self, message, context_id, forward_id, media_id):
+    async def dump_message(self, message, context_id, forward_id, media_id):
         """
         Dump a Message into the Message table.
 
@@ -161,9 +160,9 @@ class Dumper:
 
         for callback in self._dump_callbacks['message']:
             callback(row)
-        return update_by_id(db_message, row)
+        return await update_by_id(db_message, row)
 
-    def dump_message_service(self, message, context_id, media_id):
+    async def dump_message_service(self, message, context_id, media_id):
         """Similar to self.dump_message, but for MessageAction's."""
         name = utils.action_to_name(message.action)
         if not name:
@@ -192,9 +191,9 @@ class Dumper:
         for callback in self._dump_callbacks['message_service']:
             callback(row)
 
-        return update_by_id(db_message, row)
+        return await update_by_id(db_message, row)
 
-    def dump_admin_log_event(self, event, context_id, media_id1, media_id2):
+    async def dump_admin_log_event(self, event, context_id, media_id1, media_id2):
         """Similar to self.dump_message_service but for channel actions."""
         name = utils.action_to_name(event.action)
         if not name:
@@ -219,9 +218,9 @@ class Dumper:
         for callback in self._dump_callbacks['adminlog_event']:
             callback(row)
 
-        return update_by_id(db_admin_log, row)
+        return await update_by_id(db_admin_log, row)
 
-    def dump_user(self, user_full, photo_id, timestamp=None):
+    async def dump_user(self, user_full, photo_id, timestamp=None):
         """Dump a UserFull into the User table
         Params: UserFull to dump, MediaID of the profile photo in the DB
         Returns -, or False if not added"""
@@ -242,9 +241,9 @@ class Dumper:
         for callback in self._dump_callbacks['user']:
             callback(row)
 
-        return update_by_invalidation_time(db_user, row, self.invalidation_time)
+        return await update_by_invalidation_time(db_user, row, self.invalidation_time)
 
-    def dump_channel(self, channel_full, channel, photo_id, timestamp=None):
+    async def dump_channel(self, channel_full, channel, photo_id, timestamp=None):
         """Dump a Channel into the Channel table.
         Params: ChannelFull, Channel to dump, MediaID
                 of the profile photo in the DB
@@ -263,10 +262,10 @@ class Dumper:
         for callback in self._dump_callbacks['channel']:
             callback(row)
 
-        return update_by_invalidation_time(db_channel, row, self.invalidation_time)
+        return await update_by_invalidation_time(db_channel, row, self.invalidation_time)
 
-    def dump_supergroup(self, supergroup_full, supergroup, photo_id,
-                        timestamp=None):
+    async def dump_supergroup(self, supergroup_full, supergroup, photo_id,
+                              timestamp=None):
         """Dump a Supergroup into the Supergroup table
         Params: ChannelFull, Channel to dump, MediaID
                 of the profile photo in the DB.
@@ -285,9 +284,9 @@ class Dumper:
         for callback in self._dump_callbacks['supergroup']:
             callback(row)
 
-        return update_by_invalidation_time(db_super_group, row, self.invalidation_time)
+        return await update_by_invalidation_time(db_super_group, row, self.invalidation_time)
 
-    def dump_chat(self, chat, photo_id, timestamp=None):
+    async def dump_chat(self, chat, photo_id, timestamp=None):
         """Dump a Chat into the Chat table
         Params: Chat to dump, MediaID of the profile photo in the DB
         Returns -"""
@@ -307,19 +306,22 @@ class Dumper:
         for callback in self._dump_callbacks['chat']:
             callback(row)
 
-        return update_by_invalidation_time(db_chat, row, self.invalidation_time)
+        return await update_by_invalidation_time(db_chat, row, self.invalidation_time)
 
-    def dump_participants_delta(self, context_id, ids):
+    async def dump_participants_delta(self, context_id, ids):
         """
         Dumps the delta between the last dump of IDs for the given context ID
         and the current input user IDs.
         """
         ids = set(ids)
-        ret = db_chat_participants.find({'context_id': context_id}).sort([('date_updated', pymongo.ASCENDING)])
-        if not ret.count():
+        cursor = db_chat_participants.find({'context_id': context_id})
+        cursor.sort('date_updated', 1)
+        count = await db_chat_participants.count_documents({'context_id': context_id})
+        if not count:
             added = ids
             removed = set()
         else:
+            ret = await cursor.to_list(count)
             # Build the last known list of participants from the saved deltas
             last_ids = set(ret[0]['added'])
             for row in ret[1:]:
@@ -339,10 +341,10 @@ class Dumper:
         for callback in self._dump_callbacks['participants_delta']:
             callback(row)
 
-        db_chat_participants.insert(row)
+        await db_chat_participants.insert_one(row)
         return added, removed
 
-    def dump_media(self, media, media_type=None):
+    async def dump_media(self, media, media_type=None):
         """Dump a MessageMedia into the Media table
         Params: media Telethon object
         Returns: ID of inserted row"""
@@ -377,7 +379,7 @@ class Dumper:
             if isinstance(doc, types.Document):
                 row['mime_type'] = doc.mime_type
                 row['size'] = doc.size
-                row['thumbnail_id'] = self.dump_media(doc.thumb)
+                row['thumbnail_id'] = await self.dump_media(doc.thumb)
                 row['local_id'] = doc.id
                 row['volume_id'] = doc.version
                 row['secret'] = doc.access_hash
@@ -394,7 +396,7 @@ class Dumper:
             game = media.game
             if isinstance(game, types.Game):
                 row['name'] = game.short_name
-                row['thumbnail_id'] = self.dump_media(game.photo)
+                row['thumbnail_id'] = await self.dump_media(game.photo)
                 row['local_id'] = game.id
                 row['secret'] = game.access_hash
 
@@ -413,7 +415,7 @@ class Dumper:
         elif isinstance(media, types.MessageMediaInvoice):
             row['type'] = 'invoice'
             row['name'] = media.title
-            row['thumbnail_id'] = self.dump_media(media.photo)
+            row['thumbnail_id'] = await self.dump_media(media.photo)
 
         elif isinstance(media, types.MessageMediaPhoto):
             row['type'] = 'photo'
@@ -436,7 +438,7 @@ class Dumper:
             web = media.webpage
             if isinstance(web, types.WebPage):
                 row['name'] = web.title
-                row['thumbnail_id'] = self.dump_media(web.photo, 'thumbnail')
+                row['thumbnail_id'] = await self.dump_media(web.photo, 'thumbnail')
                 row['local_id'] = web.id
                 row['secret'] = web.hash
 
@@ -452,7 +454,7 @@ class Dumper:
                 large = max(sizes, key=lambda s: s.w * s.h)
                 media = large
                 if small != large:
-                    row['thumbnail_id'] = self.dump_media(small, 'thumbnail')
+                    row['thumbnail_id'] = await self.dump_media(small, 'thumbnail')
 
         if isinstance(media, (types.PhotoSize,
                               types.PhotoCachedSize,
@@ -472,7 +474,7 @@ class Dumper:
         if isinstance(media, (types.UserProfilePhoto, types.ChatPhoto)):
             row['type'] = 'photo'
             row['mime_type'] = 'image/jpeg'
-            row['thumbnail_id'] = self.dump_media(
+            row['thumbnail_id'] = await self.dump_media(
                 media.photo_small, 'thumbnail'
             )
             media = media.photo_big
@@ -489,16 +491,16 @@ class Dumper:
             for callback in self._dump_callbacks['media']:
                 callback(row)
 
-            ret = db_media.find_one({
+            ret = await db_media.find_one({
                 'local_id': row['local_id'],
                 'volume_id': row['volume_id'],
                 'secret': row['secret']
             })
             if ret:
                 return ret['_id']
-            return db_media.insert(row)
+            return (await db_media.insert_one(row)).inserted_id
 
-    def dump_forward(self, forward):
+    async def dump_forward(self, forward):
         """
         Dump a message forward relationship into the Forward table.
 
@@ -516,57 +518,61 @@ class Dumper:
 
         for callback in self._dump_callbacks['forward']:
             callback(row)
-        ret = db_forward.insert(row)
-        return ret
+        ret = await db_forward.insert_one(row)
+        return ret.inserted_id
 
-    def get_max_message_id(self, context_id):
+    async def get_max_message_id(self, context_id):
         """
         Returns the largest saved message ID for the given
         context_id, or 0 if no messages have been saved.
         """
-        ret = db_message.find_one({'context_id': context_id}, sort=[('id', -1)])
+        ret = await db_message.find_one({'context_id': context_id}, sort=[('id', -1)])
         return ret['id']
 
-    def get_message_count(self, context_id):
+    async def get_message_count(self, context_id):
         """Gets the message count for the given context"""
-        return db_message.find({'context_id': context_id}).count()
+        return await db_message.count_documents({'context_id': context_id})
 
-    def get_resume(self, context_id):
+    async def get_resume(self, context_id):
         """
         For the given context ID, return a tuple consisting of the offset
         ID and offset date from which to continue, as well as at which ID
         to stop.
         """
-        return db_resume.find_one({'context_id': context_id}) or {'id': 0, 'date': 0, 'stop_at': 0}
+        return await db_resume.find_one({'context_id': context_id}) or {'id': 0, 'date': 0, 'stop_at': 0}
 
-    def save_resume(self, context_id, msg=0, msg_date=0, stop_at=0):
+    async def save_resume(self, context_id, msg=0, msg_date=0, stop_at=0):
         """
         Saves the information required to resume a download later.
         """
         if isinstance(msg_date, datetime):
             msg_date = int(msg_date.timestamp())
 
-        return db_resume.insert({'context_id': context_id, 'id': msg, 'date': msg_date, 'stop_at': stop_at})
+        return (await db_resume.insert_one(
+            {'context_id': context_id, 'id': msg, 'date': msg_date, 'stop_at': stop_at})).inserted_id
 
-    def iter_resume_entities(self, context_id):
+    async def get_resume_entities(self, context_id):
         """
         Returns an iterator over the entities that need resuming for the
         given context_id. Note that the entities are *removed* once the
         iterator is consumed completely.
         """
         rows = db_resume_entity.find({'context_id': context_id})
-        logger.info(f'加载了【{rows.count()}】条待恢复数据')
-        for row in rows:
+        count = await db_resume_entity.count_documents({'context_id': context_id})
+        logger.info(f'加载了【{count}】条待恢复数据')
+        result = []
+        async for row in rows:
             kind = resolve_id(row['id'])[1]
             if kind == types.PeerUser:
-                yield types.InputPeerUser(row['id'], row['access_hash'])
+                result.append(types.InputPeerUser(row['id'], row['access_hash']))
             elif kind == types.PeerChat:
-                yield types.InputPeerChat(row['id'])
+                result.append(types.InputPeerChat(row['id']))
             elif kind == types.PeerChannel:
-                yield types.InputPeerChannel(row['id'], row['access_hash'])
-        db_resume_entity.delete_many({'context_id': context_id})
+                result.append(types.InputPeerChannel(row['id'], row['access_hash']))
+        await db_resume_entity.delete_many({'context_id': context_id})
+        return result
 
-    def save_resume_entities(self, context_id, entities):
+    async def save_resume_entities(self, context_id, entities):
         """
         Saves the given entities for resuming at a later point.
         """
@@ -580,21 +586,21 @@ class Dumper:
             elif isinstance(ent, types.InputPeerChannel):
                 rows.append({'context_id': context_id, 'id': ent.channel_id, 'access_hash': ent.access_hash})
         if rows:
-            db_resume_entity.insert_many(rows)
+            await db_resume_entity.insert_many(rows)
 
-    def iter_resume_media(self, context_id):
+    async def iter_resume_media(self, context_id):
         """
         Returns an iterator over the media tuples that need resuming for
         the given context_id. Note that the media rows are *removed* once
         the iterator is consumed completely.
         """
         ret = db_resume_media.find({'context_id': context_id})
-        for row in ret:
+        async for row in ret:
             media_id, sender_id, date = row['media_id'], row['sender_id'], row['date']
             yield media_id, sender_id, datetime.utcfromtimestamp(date)
-        db_resume_media.delete_many({'context_id': context_id})
+        await db_resume_media.delete_many({'context_id': context_id})
 
-    def save_resume_media(self, media_tuples):
+    async def save_resume_media(self, media_tuples):
         """
         Saves the given media tuples for resuming at a later point.
 
@@ -611,4 +617,4 @@ class Dumper:
             }
             requests.append(UpdateOne({'media_id': row[0]}, {'$set': _row}, upsert=True))
         if requests:
-            db_resume_media.bulk_write(requests)
+            await db_resume_media.bulk_write(requests)

@@ -65,7 +65,7 @@ class Exporter:
         开始下载
         :return:
         """
-        self.dumper.check_self_user((await self.client.get_me(input_peer=True)).user_id)
+        await self.dumper.check_self_user((await self.client.get_me(input_peer=True)).user_id)
         if 'Whitelist' in self.dumper.config:
             logger.info("使用白名单模式进行下载")
             async for entity in get_entities_iter('whitelist', self.dumper.config['Whitelist'], self.client):
@@ -79,7 +79,7 @@ class Exporter:
             dialogs = await self.client.get_dialogs(limit=None)
             logger.info(f"获取了{len(dialogs)}个对话")
             for dialog in reversed(dialogs):
-                self.dumper.dump_dialog(dialog)
+                await self.dumper.dump_dialog(dialog)
                 await self.downloader.start(dialog.entity)
 
     async def download_past_media(self):
@@ -87,7 +87,7 @@ class Exporter:
         下载我们看到过但之前没有下载的文件
         :return:
         """
-        self.dumper.check_self_user((await self.client.get_me(input_peer=True)).user_id)
+        await self.dumper.check_self_user((await self.client.get_me(input_peer=True)).user_id)
         if 'Whitelist' in self.dumper.config:
             logger.info("使用白名单模式进行下载")
             async for entity in get_entities_iter('whitelist', self.dumper.config['Whitelist'], self.client):

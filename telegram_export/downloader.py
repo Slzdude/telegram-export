@@ -27,10 +27,10 @@ DOWNLOAD_PART_SIZE = 256 * 1024
 
 # How long should we sleep between these requests? These numbers
 # should be tuned to adjust (n requests/time spent + flood time).
-USER_FULL_DELAY = 0  # 1.5
-CHAT_FULL_DELAY = 0  # 1.5
-MEDIA_DELAY = 0  # 3.0
-HISTORY_DELAY = 0  # 1.0
+USER_FULL_DELAY = 1.5  # 1.5
+CHAT_FULL_DELAY = 1.5  # 1.5
+MEDIA_DELAY = 3  # 3.0
+HISTORY_DELAY = 1  # 1.0
 
 
 class Downloader:
@@ -89,7 +89,7 @@ class Downloader:
             return False
         return export_utils.get_media_type(media) in self.types
 
-    def _dump_full_entity(self, entity):
+    async def _dump_full_entity(self, entity):
         """
         Dumps the full entity into the Dumper, also enqueuing their profile
         photo if any so it can be downloaded later by a different coroutine.
@@ -98,23 +98,23 @@ class Downloader:
         """
         if isinstance(entity, types.UserFull):
             if not self.types or 'chatphoto' in self.types:
-                photo_id = self.dumper.dump_media(entity.profile_photo)
+                photo_id = await self.dumper.dump_media(entity.profile_photo)
             else:
                 photo_id = None
             self.enqueue_photo(entity.profile_photo, photo_id, entity.user)
-            self.dumper.dump_user(entity, photo_id=photo_id)
+            await self.dumper.dump_user(entity, photo_id=photo_id)
 
         elif isinstance(entity, types.Chat):
             if not self.types or 'chatphoto' in self.types:
-                photo_id = self.dumper.dump_media(entity.photo)
+                photo_id = await self.dumper.dump_media(entity.photo)
             else:
                 photo_id = None
             self.enqueue_photo(entity.photo, photo_id, entity)
-            self.dumper.dump_chat(entity, photo_id=photo_id)
+            await self.dumper.dump_chat(entity, photo_id=photo_id)
 
         elif isinstance(entity, types.messages.ChatFull):
             if not self.types or 'chatphoto' in self.types:
-                photo_id = self.dumper.dump_media(entity.full_chat.chat_photo)
+                photo_id = await self.dumper.dump_media(entity.full_chat.chat_photo)
             else:
                 photo_id = None
             chat = next(
@@ -122,12 +122,12 @@ class Downloader:
             )
             self.enqueue_photo(entity.full_chat.chat_photo, photo_id, chat)
             if chat.megagroup:
-                self.dumper.dump_supergroup(entity.full_chat, chat,
-                                            photo_id)
+                await self.dumper.dump_supergroup(entity.full_chat, chat,
+                                                  photo_id)
             else:
-                self.dumper.dump_channel(entity.full_chat, chat, photo_id)
+                await self.dumper.dump_channel(entity.full_chat, chat, photo_id)
 
-    def _dump_messages(self, messages, target):
+    async def _dump_messages(self, messages, target):
         """
         Helper method to iterate the messages from a GetMessageHistoryRequest
         and dump them into the Dumper, mostly to avoid excessive nesting.
@@ -136,32 +136,32 @@ class Downloader:
         """
         for m in messages:
             if isinstance(m, types.Message):
-                media_id = self.dumper.dump_media(m.media)
+                media_id = await self.dumper.dump_media(m.media)
                 if media_id and self._check_media(m.media):
                     self.enqueue_media(
                         media_id, utils.get_peer_id(target), m.from_id, m.date
                     )
 
-                self.dumper.dump_message(
+                await self.dumper.dump_message(
                     message=m,
                     context_id=utils.get_peer_id(target),
-                    forward_id=self.dumper.dump_forward(m.fwd_from),
+                    forward_id=await self.dumper.dump_forward(m.fwd_from),
                     media_id=media_id
                 )
             elif isinstance(m, types.MessageService):
                 if isinstance(m.action, types.MessageActionChatEditPhoto):
-                    media_id = self.dumper.dump_media(m.action.photo)
+                    media_id = await self.dumper.dump_media(m.action.photo)
                     self.enqueue_photo(m.action.photo, media_id, target,
                                        peer_id=m.from_id, date=m.date)
                 else:
                     media_id = None
-                self.dumper.dump_message_service(
+                await self.dumper.dump_message_service(
                     message=m,
                     context_id=utils.get_peer_id(target),
                     media_id=media_id
                 )
 
-    def _dump_admin_log(self, events, target):
+    async def _dump_admin_log(self, events, target):
         """
         Helper method to iterate the events from a GetAdminLogRequest
         and dump them into the Dumper, mostly to avoid excessive nesting.
@@ -170,10 +170,9 @@ class Downloader:
         """
         for event in events:
             assert isinstance(event, types.ChannelAdminLogEvent)
-            if isinstance(event.action,
-                          types.ChannelAdminLogEventActionChangePhoto):
-                media_id1 = self.dumper.dump_media(event.action.new_photo)
-                media_id2 = self.dumper.dump_media(event.action.prev_photo)
+            if isinstance(event.action, types.ChannelAdminLogEventActionChangePhoto):
+                media_id1 = await self.dumper.dump_media(event.action.new_photo)
+                media_id2 = await self.dumper.dump_media(event.action.prev_photo)
                 self.enqueue_photo(event.action.new_photo, media_id1, target,
                                    peer_id=event.user_id, date=event.date)
                 self.enqueue_photo(event.action.prev_photo, media_id2, target,
@@ -181,12 +180,12 @@ class Downloader:
             else:
                 media_id1 = None
                 media_id2 = None
-            self.dumper.dump_admin_log_event(
+            await self.dumper.dump_admin_log_event(
                 event, utils.get_peer_id(target), media_id1, media_id2
             )
         return min(e.id for e in events)
 
-    def _get_name(self, peer_id):
+    async def _get_name(self, peer_id):
         if peer_id is None:
             return ''
 
@@ -197,24 +196,24 @@ class Downloader:
         # c = self.dumper.conn.cursor()
         _, kind = utils.resolve_id(peer_id)
         if kind == types.PeerUser:
-            row = db_user.find_one({'id': peer_id})
+            row = await db_user.find_one({'id': peer_id})
             if row:
                 return f'{row["first_name"] or ""} {row["last_name"] or ""}'.strip()
         elif kind == types.PeerChat:
-            row = db_user.find_one({'id': peer_id})
+            row = await db_user.find_one({'id': peer_id})
             if row:
                 return row['title']
         elif kind == types.PeerChannel:
-            row = db_channel.find_one({'id': peer_id})
+            row = await db_channel.find_one({'id': peer_id})
             if row:
                 return row['title']
-            row = db_super_group.find_one({'id': peer_id})
+            row = await db_super_group.find_one({'id': peer_id})
             if row:
                 return row['title']
         return ''
 
     async def _download_media(self, media_id, context_id, sender_id, date, progress):
-        media_row = db_media.find_one({'_id': media_id})
+        media_row = await db_media.find_one({'_id': media_id})
         progress.name = media_row['name']
         if media_row['size']:
             if media_row['size'] > self.max_size:
@@ -227,7 +226,7 @@ class Downloader:
         # namespace so we need to split it before actually comparing.
         media_type = media_row['type'].split('.')
         media_type, media_subtype = media_type[0], media_type[-1]
-        if media_type not in ('document',):
+        if media_type not in ('document', 'photo'):
             logger.info('忽略文档类型：%s', media_type)
             return  # Only photos or documents are actually downloadable
 
@@ -236,8 +235,8 @@ class Downloader:
             context_id=context_id,
             sender_id=sender_id,
             type=media_subtype or 'unknown',
-            name=self._get_name(context_id) or 'unknown',
-            sender_name=self._get_name(sender_id) or 'unknown'
+            name=await self._get_name(context_id) or 'unknown',
+            sender_name=await self._get_name(sender_id) or 'unknown'
         )
 
         # Documents might have a filename, which may have an extension. Use
@@ -318,7 +317,8 @@ class Downloader:
     async def _user_consumer(self, queue):
         while self._running:
             start = time.time()
-            self._dump_full_entity(await self.client(functions.users.GetFullUserRequest(await queue.get())))
+            user_id = await queue.get()
+            await self._dump_full_entity(await self.client(functions.users.GetFullUserRequest(user_id)))
             queue.task_done()
             self.running_entity.inc()
             await asyncio.sleep(max(USER_FULL_DELAY - (time.time() - start), 0), loop=self.loop)
@@ -328,9 +328,9 @@ class Downloader:
             start = time.time()
             chat = await queue.get()
             if isinstance(chat, (types.Chat, types.PeerChat)):
-                self._dump_full_entity(chat)
+                await self._dump_full_entity(chat)
             else:  # isinstance(chat, (types.Channel, types.PeerChannel)):
-                self._dump_full_entity(await self.client(
+                await self._dump_full_entity(await self.client(
                     functions.channels.GetFullChannelRequest(chat)
                 ))
             queue.task_done()
@@ -405,20 +405,20 @@ class Downloader:
         chat_name = utils.get_display_name(target)
         logger.info(f'开始爬取【{chat_name}】')
 
-        found = self.dumper.get_message_count(entity)
+        found = await self.dumper.get_message_count(entity)
         logger.info(f'已转储【{found}】条消息')
         self.running_message = MessageProgress(chat_name)
         self.running_entity = EntityProgress(chat_name)
 
         user_consumers = [asyncio.ensure_future(self._user_consumer(self._user_queue), loop=self.loop)
-                          for _ in range(1)]
+                          for _ in range(3)]
         chat_consumers = [asyncio.ensure_future(self._chat_consumer(self._chat_queue), loop=self.loop)
-                          for _ in range(1)]
+                          for _ in range(3)]
         media_consumers = [asyncio.ensure_future(self._media_consumer(self._media_queue, chat_name, i), loop=self.loop)
-                           for i in range(3)]
-
-        self.enqueue_entities(self.dumper.iter_resume_entities(entity))
-        for mid, sender_id, date in self.dumper.iter_resume_media(entity):
+                           for i in range(5)]
+        resume_entities = await self.dumper.get_resume_entities(entity)
+        self.enqueue_entities(resume_entities)
+        async for mid, sender_id, date in self.dumper.iter_resume_media(entity):
             self.enqueue_media(mid, entity, sender_id, date)
 
         try:
@@ -439,11 +439,11 @@ class Downloader:
                 try:
                     logger.info('获取群组参与人员列表')
                     participants = await self.client.get_participants(target_in)
-                    added, removed = self.dumper.dump_participants_delta(entity, ids=[x.id for x in participants])
+                    added, removed = await self.dumper.dump_participants_delta(entity, ids=[x.id for x in participants])
                     logger.info(f'群组【{chat_name}】新加入成员{len(added)}名，退出成员{len(removed)}', )
                 except ChatAdminRequiredError:
                     logger.error('获取群组成员失败，权限不足')
-            ret = self.dumper.get_resume(entity)
+            ret = await self.dumper.get_resume(entity)
             req.offset_id, req.offset_date, stop_at = ret['id'], ret['date'], ret['stop_at']
             if req.offset_id:
                 logger.info('Resuming at %s (%s)', req.offset_date, req.offset_id)
@@ -453,7 +453,6 @@ class Downloader:
             # Rather silly considering logs only last up to two days and
             # there isn't much information in them (due to their short life).
             if isinstance(target_in, types.InputPeerChannel):
-                logger.info('开始爬取AdminLog')
                 log_req = functions.channels.GetAdminLogRequest(
                     target_in, q='', min_id=0, max_id=0, limit=1
                 )
@@ -471,6 +470,7 @@ class Downloader:
             # This loop is for get history, although the admin log
             # is interlaced as well to dump both at the same time.
             while self._running:
+                logger.info('开始爬取当前频道')
                 start = time.time()
                 history = await self.client(req)
                 # Queue found entities so they can be dumped later
@@ -480,10 +480,11 @@ class Downloader:
                 self.running_entity.total = len(self._checked_entity_ids)
 
                 # Dump the messages from this batch
-                self._dump_messages(history.messages, target)
+                await self._dump_messages(history.messages, target)
 
                 # Determine whether to continue dumping or we're done
                 count = len(history.messages)
+                logger.info(f'获取了{count}条消息')
                 self.running_message.total = getattr(history, 'count', count)
                 self.running_message.inc(count)
                 if history.messages:
@@ -500,31 +501,29 @@ class Downloader:
                 # as the minimum message ID (now in offset ID) is less than
                 # the highest ID ("closest" bound we need to reach), stop.
                 if count < req.limit or req.offset_id <= stop_at:
-                    logger.debug('Received less messages than limit, done.')
-                    max_id = self.dumper.get_max_message_id(entity) or 0  # can't have NULL
-                    self.dumper.save_resume(entity, stop_at=max_id)
+                    logger.info('获取的消息少于限制的数量')
+                    max_id = await self.dumper.get_max_message_id(entity) or 0  # can't have NULL
+                    await self.dumper.save_resume(entity, stop_at=max_id)
                     break
 
                 # Keep track of the last target ID (smallest one),
                 # so we can resume from here in case of interruption.
-                self.dumper.save_resume(
+                await self.dumper.save_resume(
                     entity, msg=req.offset_id, msg_date=req.offset_date,
                     stop_at=stop_at  # We DO want to preserve stop_at.
                 )
 
                 chunks_left -= 1  # 0 means infinite, will reach -1 and never 0
                 if chunks_left == 0:
-                    logger.debug('Reached maximum amount of chunks, done.')
+                    logger.info('已经到达最大的分块数量，完成本频道爬取')
                     break
 
                 # Interlace with the admin log request if any
                 if log_req:
                     result = await self.client(log_req)
-                    self.enqueue_entities(itertools.chain(
-                        result.users, result.chats
-                    ))
+                    self.enqueue_entities(itertools.chain(result.users, result.chats))
                     if result.events:
-                        log_req.max_id = self._dump_admin_log(result.events, target)
+                        log_req.max_id = await self._dump_admin_log(result.events, target)
                     else:
                         log_req = None
 
@@ -545,7 +544,7 @@ class Downloader:
                     result.users, result.chats
                 ))
                 if result.events:
-                    log_req.max_id = self._dump_admin_log(result.events, target)
+                    log_req.max_id = await self._dump_admin_log(result.events, target)
                     await asyncio.sleep(max(HISTORY_DELAY - (time.time() - start), 0), loop=self.loop)
                 else:
                     log_req = None
@@ -565,18 +564,18 @@ class Downloader:
             while not self._chat_queue.empty():
                 entities.append(self._chat_queue.get_nowait())
             if entities:
-                self.dumper.save_resume_entities(entity, entities)
+                await self.dumper.save_resume_entities(entity, entities)
 
             # Do the same with the media queue
             media = []
             while not self._media_queue.empty():
                 media.append(self._media_queue.get_nowait())
-            self.dumper.save_resume_media(media)
+            await self.dumper.save_resume_media(media)
 
             # 删除下载了一部分的文件
             if self._incomplete_download is not None and os.path.isfile(self._incomplete_download):
                 os.remove(self._incomplete_download)
-        logger.info('Download Exit')
+        logger.info('当前频道下载完毕')
 
     async def download_past_media(self, dumper, target_id):
         """

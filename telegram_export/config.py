@@ -14,7 +14,7 @@ defaults = {
     'LogLevel': 'INFO',
     'DBFileName': 'export',
     'InvalidationTime': '7200',
-    'ChunkSize': '1000',
+    'ChunkSize': '100',
     'MaxChunks': '0',
     'LibraryLogLevel': 'WARNING',
     'MediaFilenameFmt': 'usermedia/{name}-{context_id}/{type}-{filename}'

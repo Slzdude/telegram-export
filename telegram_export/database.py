@@ -1,8 +1,8 @@
 import time
 
-import pymongo
+import motor.motor_asyncio
 
-client = pymongo.MongoClient('mongodb://localhost:27017/')
+client = motor.motor_asyncio.AsyncIOMotorClient('mongodb://localhost:27017/')
 db = client.get_database('tg')
 
 db_self_info = db['self_info']
@@ -27,12 +27,12 @@ db_resume_media.create_index('context_id')
 db_chat_participants.create_index('context_id')
 
 
-def update_by_id(col, row):
-    return col.update_one({'id': row['id']}, {'$set': row}, upsert=True)
+async def update_by_id(col, row):
+    return await col.update_one({'id': row['id']}, {'$set': row}, upsert=True)
 
 
-def update_by_invalidation_time(col, row, t):
-    ret = col.find_one({'id': row['id']})
+async def update_by_invalidation_time(col, row, t):
+    ret = await col.find_one({'id': row['id']})
     if not ret or time.time() - ret['date_updated'] > t:
-        ret = col.update_one({'id': row['id']}, {'$set': row}, upsert=True)
+        ret = await col.update_one({'id': row['id']}, {'$set': row}, upsert=True)
     return ret
